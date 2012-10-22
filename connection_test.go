@@ -216,13 +216,13 @@ func TestMultiFetchRequest(t *testing.T) {
 			gotMsg := false
 
 			for msg := range fres {
-					if msg.Err != nil {
-						t.Fatal("Error consuming", msg.Err)
-					}
-					t.Log("Got msg", string(msg.Message))
+				if msg.Err != nil {
+					t.Fatal("Error consuming", msg.Err)
+				}
+				t.Log("Got msg", string(msg.Message))
 
-					gotMsg = true
-					recv <- msg.Message
+				gotMsg = true
+				recv <- msg.Message
 			}
 
 			if gotMsg {

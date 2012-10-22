@@ -29,7 +29,6 @@ type FetchResponse struct {
 
 type FetchResponseChan chan FetchResponse
 
-
 type OffsetsResponse struct {
 	// Add the topic and partition with it to make things easier
 	Offsets []TopicPartitionOffset
@@ -127,11 +126,10 @@ func (j *multiFetchResponseJob) ReadResponse(r io.Reader, c *Conn) (err error) {
 
 		messageSetReader := io.LimitReader(r, int64(messageSetLen))
 		var code ErrorCode
-		if err = binread(messageSetReader, &code); err != nil {
-			return
-		}
-
-		if code != ErrorCodeNoError {
+		switch err = binread(messageSetReader, &code); {
+		case err != nil :
+			return err
+		case code != ErrorCodeNoError:
 			return code
 		}
 
@@ -171,7 +169,7 @@ func (c *Conn) MultiFetch(req MultiFetchRequest) (results FetchResponseChan, err
 
 	resp := make(FetchResponseChan)
 	c.responseQueue <- &multiFetchResponseJob{
-		ch: resp,
+		ch:  resp,
 		mfr: req,
 	}
 
@@ -275,19 +273,14 @@ func (c *Conn) readMessagesSet(info TopicPartitionOffset, ch FetchResponseChan, 
 			c.message = c.message[:payloadLen]
 		}
 
-		if err = binread(messageStream, &magic, &compression, &checksum, c.message); err != nil {
-			return
-		}
-
-		if compression != CompressionTypeNone {
+		switch err = binread(messageStream, &magic, &compression, &checksum, c.message); {
+		case err != nil:
+			return err
+		case compression != CompressionTypeNone:
 			return fmt.Errorf("Only support none compression")
-		}
-
-		if magic != MagicTypeWithCompression {
+		case magic != MagicTypeWithCompression:
 			return fmt.Errorf("Only support new message format (with magic type of 1)")
-		}
-
-		if crc32.ChecksumIEEE(c.message) != checksum {
+		case crc32.ChecksumIEEE(c.message) != checksum:
 			return fmt.Errorf("Got invalid checksum")
 		}
 
@@ -305,6 +298,7 @@ func (c *Conn) readMessagesSet(info TopicPartitionOffset, ch FetchResponseChan, 
 		c.lastMessage = c.message
 		c.message = tmp
 	}
+
 	return
 }
 

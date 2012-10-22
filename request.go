@@ -1,11 +1,16 @@
 package kafka
 
 import (
-	"encoding/binary"
 	"fmt"
 	"hash/crc32"
 	"io"
 )
+
+type request interface {
+	io.WriterTo
+	Len() int32
+	Type() requestType
+}
 
 type requestType int16
 
@@ -16,97 +21,6 @@ const (
 	requestTypeMultiProduce requestType = 3
 	requestTypeOffsets      requestType = 4
 )
-
-// We'll just use the codes as errors
-type ErrorCode int16
-
-const (
-	ErrorCodeUnknown          ErrorCode = -1
-	ErrorCodeNoError          ErrorCode = 0
-	ErrorCodeOffsetOutOfRange ErrorCode = 1
-	ErrorCodeInvalidMessage   ErrorCode = 2
-	ErrorCodeWrongPartition   ErrorCode = 3
-	ErrorCodeInvalidFetchSize ErrorCode = 4
-)
-
-var errorMessages = map[ErrorCode]string{
-	ErrorCodeUnknown:          "Unknown Error",
-	ErrorCodeNoError:          "Success",
-	ErrorCodeOffsetOutOfRange: "Offset requested is no longer available on the server",
-	ErrorCodeInvalidMessage:   "A message you sent failed its checksum and is corrupt.",
-	ErrorCodeWrongPartition:   "You tried to access a partition that doesn't exist (was not between 0 and (num_partitions - 1)).",
-	ErrorCodeInvalidFetchSize: "The size you requested for fetching is smaller than the message you're trying to fetch.",
-}
-
-func (ec ErrorCode) Error() string {
-	return errorMessages[ec]
-}
-
-type TopicPartition struct {
-	Topic     string
-	Partition Partition
-}
-
-type TopicPartitionOffset struct {
-	TopicPartition
-	Offset Offset
-}
-
-type Offset int64
-type Partition int32
-
-type MagicType int8
-
-const (
-	MagicTypeWithoutCompression MagicType = 0
-	MagicTypeWithCompression    MagicType = 1
-)
-
-type CompressionType int8
-
-const (
-	CompressionTypeNone   CompressionType = 0
-	CompressionTypeGZip   CompressionType = 1
-	CompressionTypeSnappy CompressionType = 2
-)
-
-type request interface {
-	io.WriterTo
-
-	Len() int32
-	Type() requestType
-}
-
-type OffsetTime int64
-
-const (
-	OffsetTimeLatest   OffsetTime = -1
-	OffsetTimeEarliest OffsetTime = -2
-)
-
-var networkOrder = binary.BigEndian
-
-// First reads the length to the size pt, then reads the string to the topic
-func binread(r io.Reader, data ...interface{}) error {
-	for _, d := range data {
-		if err := binary.Read(r, networkOrder, d); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func binwrite(w io.Writer, data ...interface{}) (l int64, err error) {
-	for _, d := range data {
-		if err := binary.Write(w, networkOrder, d); err != nil {
-			return -1, err
-		}
-		l += int64(binary.Size(d))
-	}
-	return
-}
-
-type Message []byte
 
 func (m Message) Len() int32 {
 	return int32(messageFullHeaderSize + len(m))
@@ -123,9 +37,6 @@ func (m Message) WriteTo(w io.Writer) (n int64, err error) {
 
 	return binwrite(w, totalLen, MagicTypeWithCompression, compression, checksum, m)
 }
-
-// List of messages
-type Messages []Message
 
 func (m Messages) Len() int32 {
 	l := int32(0)
@@ -306,13 +217,6 @@ func (m MultiProduceRequest) Len() int32 {
 func (m MultiProduceRequest) Type() requestType {
 	return requestTypeMultiProduce
 }
-
-const (
-	// excluding length field
-	messageHeaderSize = 1 + 1 + 4 // magic, compression, checksum
-	// Including the length field
-	messageFullHeaderSize = 4 + messageHeaderSize
-)
 
 func writeTopic(w io.Writer, topic string) (n int64, err error) {
 	topicBytes := []byte(topic)
