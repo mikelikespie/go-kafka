@@ -10,12 +10,7 @@ import (
 func TestFetch(t *testing.T) {
 	buff := bytes.NewBuffer(make([]byte, 0, 256))
 
-	fr := FetchRequest{
-		Topic:     "foo",
-		Offset:    362,
-		MaxSize:   32,
-		Partition: 1,
-	}
+	fr := FetchRequest{TopicPartitionOffset{TopicPartition{"foo", 1}, 362}, 32}
 
 	written, err := fr.WriteTo(buff)
 	if err != nil {
@@ -36,12 +31,7 @@ func TestMultiFetch(t *testing.T) {
 	buff := bytes.NewBuffer(make([]byte, 0, 256))
 
 	fr := MultiFetchRequest{
-		FetchRequest{
-			Topic:     "foo",
-			Offset:    362,
-			MaxSize:   32,
-			Partition: 1,
-		},
+		FetchRequest{TopicPartitionOffset{TopicPartition{"foo", 1}, 362}, 32},
 	}
 
 	written, err := fr.WriteTo(buff)
@@ -61,9 +51,9 @@ func TestMultiFetch(t *testing.T) {
 func TestProduce(t *testing.T) {
 	buff := bytes.NewBuffer(make([]byte, 0, 256))
 
+	tp := TopicPartition{"foo", 0}
 	pr := ProduceRequest{
-		Topic:     "foo",
-		Partition: 1,
+		TopicPartition: tp,
 		Messages: Messages{
 			[]byte("hello"),
 			[]byte("there"),
@@ -86,19 +76,19 @@ func TestProduce(t *testing.T) {
 
 func TestMultiProduce(t *testing.T) {
 	buff := bytes.NewBuffer(make([]byte, 0, 256))
+	tpfoo := TopicPartition{"foo", 0}
+	tpbar := TopicPartition{"bar", 0}
 
 	pr := MultiProduceRequest{
 		ProduceRequest{
-			Topic:     "bar",
-			Partition: 2,
+			TopicPartition: tpfoo,
 			Messages: Messages{
 				[]byte("hello"),
 				[]byte("there"),
 			},
 		},
 		ProduceRequest{
-			Topic:     "foo",
-			Partition: 1,
+			TopicPartition: tpbar,
 			Messages: Messages{
 				[]byte("hello"),
 				[]byte("there"),

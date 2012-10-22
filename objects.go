@@ -42,6 +42,16 @@ func (ec ErrorCode) Error() string {
 	return errorMessages[ec]
 }
 
+type TopicPartition struct {
+	Topic     string
+	Partition Partition
+}
+
+type TopicPartitionOffset struct {
+	TopicPartition
+	Offset Offset
+}
+
 type Offset int64
 type Partition int32
 
@@ -142,8 +152,7 @@ func (ms Messages) WriteTo(w io.Writer) (n int64, err error) {
 }
 
 type OffsetsRequest struct {
-	Topic     string
-	Partition Partition
+	TopicPartition
 	Time      OffsetTime
 	MaxNumber int32
 }
@@ -170,10 +179,8 @@ func (*OffsetsRequest) Type() requestType {
 }
 
 type FetchRequest struct {
-	Topic     string
-	Partition Partition
-	Offset    Offset
-	MaxSize   int32
+	TopicPartitionOffset
+	MaxSize int32
 }
 
 // Length including size in header
@@ -236,9 +243,8 @@ func (MultiFetchRequest) Type() requestType {
 }
 
 type ProduceRequest struct {
-	Topic     string
-	Partition Partition
-	Messages  Messages
+	TopicPartition
+	Messages Messages
 }
 
 func (req *ProduceRequest) Len() int32 {
