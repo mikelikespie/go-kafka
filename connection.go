@@ -9,138 +9,15 @@ import (
 	"net"
 )
 
-type Conn struct {
+type SimpleConsumer struct {
 	conn          net.Conn
 	rw            *bufio.ReadWriter
 	responseQueue chan responseJob
-
-	// Buffers
-	message, lastMessage Message
-}
-
-// Can return either an error or a message
-// Offset is the offset *after* this message
-type FetchResponse struct {
-	Message Message
-	TopicPartitionOffset
-
-	Err error
-}
-
-type FetchResponseChan chan FetchResponse
-
-type OffsetsResponse struct {
-	// Add the topic and partition with it to make things easier
-	Offsets []TopicPartitionOffset
-	Err     error
-}
-
-type OffsetsResponseChan chan OffsetsResponse
-
-type responseType int8
-
-type responseJob interface {
-	Close()
-	Fail(err error)
-	ReadResponse(r io.Reader, c *Conn) (err error)
-}
-
-type offsetsResponseJob struct {
-	TopicPartition
-	ch chan OffsetsResponse
-}
-
-func (j *offsetsResponseJob) Close() {
-	close(j.ch)
-}
-
-func (j *offsetsResponseJob) Fail(err error) {
-	j.ch <- OffsetsResponse{Err: err}
-	close(j.ch)
-}
-
-func (j *offsetsResponseJob) ReadResponse(r io.Reader, c *Conn) (err error) {
-	log.Println("got offset response")
-	var numOffsets int32
-	if err = binread(r, &numOffsets); err != nil {
-		return
-	}
-
-	offsets := make([]TopicPartitionOffset, int(numOffsets))
-	for i := range offsets {
-		log.Println("Reading offset")
-		if err = binread(r, &offsets[i].Offset); err != nil {
-			return
-		}
-
-		offsets[i].TopicPartition = j.TopicPartition
-	}
-
-	j.ch <- OffsetsResponse{Offsets: offsets}
-
-	return
-}
-
-type fetchResponseJob struct {
-	TopicPartitionOffset
-	ch FetchResponseChan
-}
-
-func (j *fetchResponseJob) Close() {
-	close(j.ch)
-}
-
-func (j *fetchResponseJob) Fail(err error) {
-	j.ch <- FetchResponse{Err: err}
-	close(j.ch)
-}
-
-func (j *fetchResponseJob) ReadResponse(r io.Reader, c *Conn) (err error) {
-	return c.readMessagesSet(j.TopicPartitionOffset, j.ch, r)
-}
-
-type multiFetchResponseJob struct {
-	mfr MultiFetchRequest
-	ch  FetchResponseChan
-}
-
-func (j *multiFetchResponseJob) Close() {
-	close(j.ch)
-}
-
-func (j *multiFetchResponseJob) Fail(err error) {
-	j.ch <- FetchResponse{Err: err}
-	close(j.ch)
-}
-
-func (j *multiFetchResponseJob) ReadResponse(r io.Reader, c *Conn) (err error) {
-	for _, info := range j.mfr {
-		var messageSetLen int32
-		switch err = binread(r, &messageSetLen); err {
-		case nil:
-		case io.EOF:
-			return nil
-		default:
-			return
-		}
-
-		messageSetReader := io.LimitReader(r, int64(messageSetLen))
-		var code ErrorCode
-		switch err = binread(messageSetReader, &code); {
-		case err != nil :
-			return err
-		case code != ErrorCodeNoError:
-			return code
-		}
-
-		err = c.readMessagesSet(info.TopicPartitionOffset, j.ch, messageSetReader)
-	}
-	return
 }
 
 const defaultQueueSize = 128
 
-func Dial(addr string) (c *Conn, err error) {
+func Dial(addr string) (c *SimpleConsumer, err error) {
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
 		return nil, err
@@ -150,12 +27,10 @@ func Dial(addr string) (c *Conn, err error) {
 
 	rw := bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn))
 
-	c = &Conn{
+	c = &SimpleConsumer{
 		conn:          conn,
 		rw:            rw,
 		responseQueue: respQueue,
-		message:       []byte{},
-		lastMessage:   []byte{},
 	}
 
 	go c.readWorker()
@@ -165,7 +40,7 @@ func Dial(addr string) (c *Conn, err error) {
 
 // We are going to reuse the buffers for fetch and multifetch, so don't keep the slices around
 // This will yield one per message and close when it's done
-func (c *Conn) MultiFetch(req MultiFetchRequest) (results FetchResponseChan, err error) {
+func (c *SimpleConsumer) MultiFetch(req MultiFetchRequest) (results FetchResponseChan, err error) {
 
 	resp := make(FetchResponseChan)
 	c.responseQueue <- &multiFetchResponseJob{
@@ -174,6 +49,7 @@ func (c *Conn) MultiFetch(req MultiFetchRequest) (results FetchResponseChan, err
 	}
 
 	if _, err = c.writeRequest(req); err != nil {
+		panic(err)
 		return nil, err
 	}
 
@@ -182,7 +58,7 @@ func (c *Conn) MultiFetch(req MultiFetchRequest) (results FetchResponseChan, err
 }
 
 // We are going to reuse the buffers for fetch and multifetch, so don't keep the slices around
-func (c *Conn) Fetch(req *FetchRequest) (results FetchResponseChan, err error) {
+func (c *SimpleConsumer) Fetch(req FetchRequest) (results FetchResponseChan, err error) {
 	resp := make(FetchResponseChan)
 
 	c.responseQueue <- &fetchResponseJob{
@@ -190,7 +66,7 @@ func (c *Conn) Fetch(req *FetchRequest) (results FetchResponseChan, err error) {
 		TopicPartitionOffset: req.TopicPartitionOffset,
 	}
 
-	if _, err = c.writeRequest(req); err != nil {
+	if _, err = c.writeRequest(&req); err != nil {
 		return nil, err
 	}
 
@@ -199,14 +75,14 @@ func (c *Conn) Fetch(req *FetchRequest) (results FetchResponseChan, err error) {
 }
 
 // We are going to reuse the buffers for fetch and multifetch, so don't keep the slices around
-func (c *Conn) Offsets(req *OffsetsRequest) (results OffsetsResponseChan, err error) {
+func (c *SimpleConsumer) Offsets(req OffsetsRequest) (results OffsetsResponseChan, err error) {
 	resp := make(OffsetsResponseChan)
 	c.responseQueue <- &offsetsResponseJob{
 		TopicPartition: req.TopicPartition,
 		ch:             resp,
 	}
 
-	if _, err = c.writeRequest(req); err != nil {
+	if _, err = c.writeRequest(&req); err != nil {
 		return nil, err
 	}
 
@@ -214,17 +90,17 @@ func (c *Conn) Offsets(req *OffsetsRequest) (results OffsetsResponseChan, err er
 	return
 }
 
-func (c *Conn) MultiProduce(req MultiProduceRequest) (err error) {
+func (c *SimpleConsumer) MultiProduce(req MultiProduceRequest) (err error) {
 	_, err = c.writeRequest(req)
 	return
 }
 
-func (c *Conn) Produce(req *ProduceRequest) (err error) {
+func (c *SimpleConsumer) Produce(req *ProduceRequest) (err error) {
 	_, err = c.writeRequest(req)
 	return
 }
 
-func (c *Conn) writeRequest(req request) (n int64, err error) {
+func (c *SimpleConsumer) writeRequest(req request) (n int64, err error) {
 	totalLen := int32(req.Len() + 2) // req, type
 
 	if n, err = binwrite(c.rw, totalLen, req.Type()); err != nil {
@@ -245,7 +121,7 @@ func (c *Conn) writeRequest(req request) (n int64, err error) {
 }
 
 // This will increment rc's offset
-func (c *Conn) readMessagesSet(info TopicPartitionOffset, ch FetchResponseChan, messageStream io.Reader) (err error) {
+func (c *SimpleConsumer) readMessagesSet(info TopicPartitionOffset, ch FetchResponseChan, messageStream io.Reader) (err error) {
 	var compression CompressionType
 	var length int32
 	var checksum uint32
@@ -262,25 +138,17 @@ func (c *Conn) readMessagesSet(info TopicPartitionOffset, ch FetchResponseChan, 
 
 		payloadLen := length - messageHeaderSize
 
-		mCap := cap(c.message)
-		if mCap < int(payloadLen) {
-			// Let's keep the bigger of the two messages
-			if mCap > cap(c.lastMessage) {
-				c.lastMessage = c.message
-			}
-			c.message = make(Message, payloadLen)
-		} else {
-			c.message = c.message[:payloadLen]
-		}
+		// TODO: reuse these.  it's not that hard
+		message := make(Message, payloadLen)
 
-		switch err = binread(messageStream, &magic, &compression, &checksum, c.message); {
+		switch err = binread(messageStream, &magic, &compression, &checksum, message); {
 		case err != nil:
 			return err
 		case compression != CompressionTypeNone:
 			return fmt.Errorf("Only support none compression")
 		case magic != MagicTypeWithCompression:
 			return fmt.Errorf("Only support new message format (with magic type of 1)")
-		case crc32.ChecksumIEEE(c.message) != checksum:
+		case crc32.ChecksumIEEE(message) != checksum:
 			return fmt.Errorf("Got invalid checksum")
 		}
 
@@ -288,28 +156,22 @@ func (c *Conn) readMessagesSet(info TopicPartitionOffset, ch FetchResponseChan, 
 
 		// If we made it here, we have a valid message
 		ch <- FetchResponse{
-			Message:              c.message,
+			Message:              message,
 			TopicPartitionOffset: info,
 		}
-
-		// Swap our buffers.  We can only guarantee our last one is not
-		// in use after the newest one is consumed
-		tmp := c.lastMessage
-		c.lastMessage = c.message
-		c.message = tmp
 	}
 
 	return
 }
 
 // reads stream and processes puts the response into pr's channel
-func (c *Conn) failResponses(err error) {
+func (c *SimpleConsumer) failResponses(err error) {
 	for rc := range c.responseQueue {
 		rc.Fail(err)
 	}
 }
 
-func (c *Conn) doRead() (err error) {
+func (c *SimpleConsumer) doRead() (err error) {
 	var responseLength int32
 	var code ErrorCode
 
@@ -356,7 +218,7 @@ func (c *Conn) doRead() (err error) {
 
 }
 
-func (c *Conn) readWorker() {
+func (c *SimpleConsumer) readWorker() {
 	defer log.Println("Read worker finishing")
 
 	for {

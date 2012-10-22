@@ -24,7 +24,7 @@ func TestProduceRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	or := &OffsetsRequest{
+	or := OffsetsRequest{
 		TopicPartition: tp,
 		MaxNumber:      1,
 		Time:           OffsetTimeLatest,
@@ -54,7 +54,7 @@ func TestProduceRequest(t *testing.T) {
 
 	poll := func() {
 		for {
-			fr := &FetchRequest{
+			fr := FetchRequest{
 				TopicPartitionOffset: offsets.Offsets[0],
 				MaxSize:              3045,
 			}
@@ -144,7 +144,7 @@ func TestMultiFetchRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	or := &OffsetsRequest{
+	or := OffsetsRequest{
 		TopicPartition: tpfoo,
 		MaxNumber:      1,
 		Time:           OffsetTimeLatest,
